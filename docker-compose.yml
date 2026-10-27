@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: notifications
+    ports: ["5432:5432"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d notifications"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  mock-provider:
+    build: .
+    command: uvicorn mock_provider.main:app --host 0.0.0.0 --port 8001
+    ports: ["8001:8001"]
+    environment: &runtime_env
+      DATABASE_URL: postgresql+asyncpg://user:password@postgres:5432/notifications
+      REDIS_URL: redis://redis:6379/0
+      MOCK_PROVIDER_URL: http://mock-provider:8001
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    environment: *runtime_env
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  worker1:
+    build: .
+    command: python -m app.worker
+    environment: *runtime_env
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  worker2:
+    build: .
+    command: python -m app.worker
+    environment: *runtime_env
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+volumes:
+  pg_data:
